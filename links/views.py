@@ -6,6 +6,9 @@ from rest_framework.views import APIView
 
 from .models import Link, Tag
 from .serializers import LinkSerializer, StatsSerializer, TagSerializer
+from django.db import transaction
+
+from .tasks import fetch_preview
 
 
 @extend_schema_view(
@@ -31,8 +34,16 @@ class LinkViewSet(viewsets.ModelViewSet):
         return qs
 
     def perform_create(self, serializer):
-        serializer.save(owner=self.request.user)
-        # Step 13: enqueue fetch_preview here
+        link = serializer.save(owner=self.request.user)
+        transaction.on_commit(lambda: fetch_preview.delay(link.id))
+
+    def perform_update(self, serializer):
+        new_url = serializer.validated_data.get("url")
+        if new_url and new_url != serializer.instance.url:
+            link = serializer.save(status=Link.Status.PENDING)
+            transaction.on_commit(lambda: fetch_preview.delay(link.id))
+        else:
+            serializer.save()
 
 
 class TagViewSet(viewsets.ReadOnlyModelViewSet):
